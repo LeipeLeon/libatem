@@ -45,7 +45,7 @@ module ATEM
       bitmask |= (payload.length + @@SIZE_OF_HEADER)
 
       package_id = 0
-      if (bitmask & (Packet::HELLO | Packet::ACK)) != 0 and @ready and payload.length != 0
+      if (bitmask & (Packet::HELLO | Packet::ACK)) != 0 && @ready && payload.length != 0
         # p "SENDING PACKAGE"
         @package_id += 1
         package_id = @package_id
@@ -75,7 +75,7 @@ module ATEM
 
     def receive
       packets = []
-      next_packet = nil
+      # next_packet = nil
 
       begin
         begin
@@ -87,11 +87,11 @@ module ATEM
 
         # print "RX(#{data.length}) "; p data.to_hex
 
-        bitmask, size, uid, ack_id, _, package_id = data.unpack("CXS>S>S>LS>")
+        bitmask, _size, uid, ack_id, _, package_id = data.unpack("CXS>S>S>LS>")
         @uid = uid
 
         bitmask = bitmask >> 3
-        size &= 0x07FF
+        # size &= 0x07FF
 
         # print "RX HEADER: "
         # p [bitmask, size, uid, ack_id, package_id]
@@ -129,7 +129,7 @@ module ATEM
         @ready = false
         self << [Packet::ACK, 0x0, ""]
 
-      elsif ((bitmask & Packet::ACK_REQ) == Packet::ACK_REQ) and (@ready or (!@ready and packet[3].length == 0))
+      elsif ((bitmask & Packet::ACK_REQ) == Packet::ACK_REQ) && (@ready || (!@ready && packet[3].length == 0))
 
         self << [Packet::ACK, packet[2], ""]
         @ready = true
@@ -139,7 +139,7 @@ module ATEM
       data = packet[3]
       packets = []
 
-      while !data.nil? and data.length > 0
+      while !data.nil? && data.length > 0
 
         packet, data = payload(data)
         packets << packet

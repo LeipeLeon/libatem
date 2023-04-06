@@ -60,7 +60,7 @@ module ATEM
 
         master = {}
         sources, master[:left], master[:right], master[:left_peak], master[:right_peak],
-          monitor = packet[1].unpack("S>xxl>l>l>l>l>")
+        # monitor = packet[1].unpack("S>xxl>l>l>l>l>")
 
         @master = master
         start_offset = 38 + sources * 2
@@ -90,7 +90,7 @@ module ATEM
     end
 
     def multithreading= enabled
-      @thread.kill if @thread
+      @thread&.kill
       @thread = nil
       return if !enabled
 

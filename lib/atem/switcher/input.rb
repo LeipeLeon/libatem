@@ -31,7 +31,7 @@ module ATEM
       def init id, name = nil, short_name = nil
         @id = id
         @name = name or "Input #{@id}"
-        @short_name = short_name or "#{@id.to_s.rjust(4, "0")}"
+        @short_name = short_name || @id.to_s.rjust(4, "0")
         @quick_init = true
       end
 
