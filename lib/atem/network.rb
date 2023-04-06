@@ -98,7 +98,7 @@ module ATEM
 
         @ack_id = package_id
 
-        packet = [ack_id, bitmask, package_id, data[@@SIZE_OF_HEADER..-1]]
+        packet = [ack_id, bitmask, package_id, data[@@SIZE_OF_HEADER..]]
 
         packets += handle(packet)
 
@@ -152,7 +152,7 @@ module ATEM
     def payload packet
       size = packet.unpack1("S>")
       pack = packet[4..size - 1]
-      packet = packet[size..-1]
+      packet = packet[size..]
 
       command = pack.slice!(0, 4)
 

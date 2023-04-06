@@ -66,12 +66,12 @@ module ATEM
         start_offset = 38 + sources * 2
 
         (0..sources - 1).each do |source|
-          source_id = packet[1][(36 + source * 2)..-1].unpack1("S>")
+          source_id = packet[1][(36 + source * 2)..].unpack1("S>")
 
           levels = {}
 
           levels[:left], levels[:right], levels[:left_peak], levels[:right_peak] =
-            packet[1][(start_offset + source * 16)..-1].unpack("l>l>l>l>")
+            packet[1][(start_offset + source * 16)..].unpack("l>l>l>l>")
 
           @inputs[source_id].audio.levels = levels
         end

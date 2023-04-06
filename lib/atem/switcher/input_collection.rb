@@ -19,7 +19,7 @@ module ATEM
 
         if index.is_a? String
           @inputs.each do |a, input|
-            return input if input.name == index or input.short_name.downcase == index.downcase
+            return input if (input.name == index) || (input.short_name.downcase == index.downcase)
           end
         end
       end
