@@ -1,186 +1,162 @@
-require 'socket'
+require "socket"
 
 class String
-
-	def to_hex
-		self.bytes.map{|a|"0x" + a.to_s(16)}.join(" ")
-	end
-
+  def to_hex
+    bytes.map { |a| "0x" + a.to_s(16) }.join(" ")
+  end
 end
 
-
 module ATEM
+  class Network
+    module Packet
+      NOP = 0x00
+      ACK_REQ = 0x01
+      HELLO = 0x02
+      RESEND = 0x04
+      UNDEFINED = 0x08
+      ACK = 0x10
+    end
 
-	class Network
+    class Retry < StandardError
+    end
 
-		module Packet
-			NOP = 0x00
-			ACK_REQ = 0x01
-			HELLO = 0x02
-			RESEND = 0x04
-			UNDEFINED = 0x08
-			ACK = 0x10
-		end
+    @@SIZE_OF_HEADER = 0x0c
 
-		class Retry < StandardError
-		end
+    @package_id = 0
 
-		@@SIZE_OF_HEADER = 0x0c
+    def initialize ip, port, uid = 0x1337
+      @socket = UDPSocket.new
+      @socket.bind "0.0.0.0", 9100
 
-		@package_id = 0
+      @ip = ip
+      @port = port
+      @uid = uid
+      @package_id = 0
+    end
 
-		def initialize ip, port, uid = 0x1337
+    def disconnect
+      @socket.close
+    end
 
-			@socket = UDPSocket.new
-			@socket.bind "0.0.0.0", 9100
+    def << data
+      bitmask, ack_id, payload = data
 
-			@ip = ip
-			@port = port
-			@uid = uid
-			@package_id = 0
+      bitmask = bitmask << 11
+      bitmask |= (payload.length + @@SIZE_OF_HEADER)
 
-		end
+      package_id = 0
+      if (bitmask & (Packet::HELLO | Packet::ACK)) != 0 and @ready and payload.length != 0
+        # p "SENDING PACKAGE"
+        @package_id += 1
+        package_id = @package_id
+      end
 
-		def disconnect
-			@socket.close
-		end
+      packet = [bitmask, @uid, ack_id, 0, package_id].pack("S>S>S>L>S>")
+      packet += payload
 
-		def << data
+      # print "TX(#{packet.length}, #{@package_id}, #{ack_id})"; p packet.to_hex
+      @socket.send packet, 0, @ip, @port
+    end
 
-			bitmask, ack_id, payload = data
+    def send! cmd, payload
+      raise "Invalid command" if cmd.bytes.length != 4
 
-			bitmask = bitmask << 11
-			bitmask |= (payload.length + @@SIZE_OF_HEADER)
-			
-			package_id = 0
-			if (bitmask & (Packet::HELLO | Packet::ACK)) != 0 and @ready and payload.length != 0
-				# p "SENDING PACKAGE"
-				@package_id += 1 
-				package_id = @package_id
-			end
+      size = cmd.length + payload.length + 4
+      datagram = [size, 0, 0].pack("S>CC") + cmd + payload
 
-			packet = [bitmask, @uid, ack_id, 0, package_id].pack("S>S>S>L>S>")
-			packet += payload
+      self << [Packet::ACK_REQ, @ack_id, datagram]
+      receive
+    end
 
-			# print "TX(#{packet.length}, #{@package_id}, #{ack_id})"; p packet.to_hex
-			@socket.send packet, 0, @ip, @port
+    def hello
+      self << [0x02, 0x0, [0x01000000, 0x00].pack("L>L>")]
+      receive_until_ready
+    end
 
-		end
+    def receive
+      packets = []
+      next_packet = nil
 
-		def send! cmd, payload
+      begin
+        begin
+          data, _ = @socket.recvfrom(2048)
+        rescue
+          p "ERR"
+          return []
+        end
 
-			raise "Invalid command" if cmd.bytes.length != 4
+        # print "RX(#{data.length}) "; p data.to_hex
 
-			size = cmd.length + payload.length + 4
-			datagram = [size, 0, 0].pack("S>CC") + cmd + payload
+        bitmask, size, uid, ack_id, _, package_id = data.unpack("CXS>S>S>LS>")
+        @uid = uid
 
-			self << [Packet::ACK_REQ, @ack_id, datagram]
-			self.receive 
+        bitmask = bitmask >> 3
+        size &= 0x07FF
 
-		end
+        # print "RX HEADER: "
+        # p [bitmask, size, uid, ack_id, package_id]
 
-		def hello
+        @ack_id = package_id
 
-			self << [0x02, 0x0, [0x01000000, 0x00].pack("L>L>")]
-			self.receive_until_ready
+        packet = [ack_id, bitmask, package_id, data[@@SIZE_OF_HEADER..-1]]
 
-		end
+        packets += handle(packet)
 
-		def receive
+        #				raise Retry
 
-			packets = []
-			next_packet = nil
+        #			rescue Retry
+        #				retry if next_packet and next_packet.length >= @@SIZE_OF_HEADER
+      end
 
-			begin
+      packets
+    end
 
-				begin
-					data, _ = @socket.recvfrom(2048)
-				rescue
-					p "ERR"
-					return []
-				end
+    def receive_until_ready
+      packets = []
+      until @ready
+        packets += receive
+      end
+      packets
+    end
 
-				# print "RX(#{data.length}) "; p data.to_hex
+    private
 
-				bitmask, size, uid, ack_id, _, package_id = data.unpack("CXS>S>S>LS>")
-				@uid = uid
+    def handle packet
+      bitmask = packet[1]
 
-				bitmask = bitmask >> 3
-				size &= 0x07FF
+      if (bitmask & Packet::HELLO) == Packet::HELLO
 
-				# print "RX HEADER: "
-				# p [bitmask, size, uid, ack_id, package_id]
+        @ready = false
+        self << [Packet::ACK, 0x0, ""]
 
-				@ack_id = package_id
+      elsif ((bitmask & Packet::ACK_REQ) == Packet::ACK_REQ) and (@ready or (!@ready and packet[3].length == 0))
 
-				packet = [ack_id, bitmask, package_id, data[ @@SIZE_OF_HEADER .. -1 ]]
+        self << [Packet::ACK, packet[2], ""]
+        @ready = true
 
-				packets += handle(packet)
+      end
 
-#				raise Retry
+      data = packet[3]
+      packets = []
 
-#			rescue Retry
-#				retry if next_packet and next_packet.length >= @@SIZE_OF_HEADER
-			end
+      while !data.nil? and data.length > 0
 
-			packets
+        packet, data = payload(data)
+        packets << packet
 
-		end
+      end
 
-		def receive_until_ready 
+      packets
+    end
 
-			packets = []
-			while !@ready
-				packets += receive
-			end
-			packets
+    def payload packet
+      size = packet.unpack1("S>")
+      pack = packet[4..size - 1]
+      packet = packet[size..-1]
 
-		end
+      command = pack.slice!(0, 4)
 
-		private
-
-		def handle packet
-
-			bitmask = packet[1]
-
-			if (bitmask & Packet::HELLO) == Packet::HELLO
-
-				@ready = false
-				self << [Packet::ACK, 0x0, '']
-
-			elsif ((bitmask & Packet::ACK_REQ) == Packet::ACK_REQ) and (@ready or (!@ready and packet[3].length == 0))
-
-				self << [Packet::ACK, packet[2], '']
-				@ready = true
-
-			end
-
-			data = packet[3]
-			packets = []
-			
-			while data != nil and data.length > 0
-
-				packet, data = payload(data)
-				packets << packet
-				
-			end
-
-			packets
-
-		end
-
-		def payload packet
-
-			size = packet.unpack("S>")[0]
-			pack = packet[4..size-1]
-			packet = packet[size..-1]
-
-			command = pack.slice!(0, 4)
-
-			[[command, pack], packet]
-
-		end
-
-	end
-
+      [[command, pack], packet]
+    end
+  end
 end

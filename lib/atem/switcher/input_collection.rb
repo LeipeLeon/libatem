@@ -1,42 +1,32 @@
 module ATEM
+  class Switcher
+    class InputCollection
+      include Enumerable
 
-	class Switcher
+      attr_reader :switcher
 
-		class InputCollection
+      def initialize switcher
+        @switcher = switcher
+        @inputs = {}
+      end
 
-			include Enumerable
+      def add input
+        @inputs[input.id] = input
+      end
 
-			attr_reader :switcher
+      def [] index
+        return @inputs[index] if @inputs[index]
 
-			def initialize switcher
-				@switcher = switcher
-				@inputs = {}
-			end
+        if index.is_a? String
+          @inputs.each do |a, input|
+            return input if input.name == index or input.short_name.downcase == index.downcase
+          end
+        end
+      end
 
-			def add input
-
-				@inputs[input.id] = input
-
-			end
-
-			def [] index
-
-				return @inputs[index] if @inputs[index]
-
-				@inputs.each do | a, input |
-
-					return input if input.name == index or input.short_name.downcase == index.downcase
-
-				end if index.is_a? String
-
-			end
-
-			def each(&block)
-				@inputs.each(&block)
-			end
-
-		end
-
-	end
-
+      def each(&block)
+        @inputs.each(&block)
+      end
+    end
+  end
 end

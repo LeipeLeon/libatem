@@ -1,158 +1,130 @@
 module ATEM
+  class Switcher
+    attr_reader :version, :product, :topology, :video_mode, :master
 
-	class Switcher
+    def initialize config
+      @config = config
+      @inputs = ATEM::Switcher::InputCollection.new self
+      @_audio_by_index = []
+    end
 
-		attr_reader :version, :product, :topology, :video_mode, :master
+    def connect
+      @airtower = ATEM::Network.new @config[:ip], @config[:port], @config[:uid]
 
-		def initialize config
-			@config = config
-			@inputs = ATEM::Switcher::InputCollection.new self
-			@_audio_by_index = []
-		end
+      response = @airtower.hello
+      # @airtower.send! "FTSU", "\x0" * 12
+      response.each { |c| handle c }
+    end
 
-		def connect
+    # YIKES!
+    def handle packet
+      case packet[0]
+      when "_ver"
 
-			@airtower = ATEM::Network.new @config[:ip], @config[:port], @config[:uid]
+        @version = packet[1].unpack("S>S>")
 
-			response = @airtower.hello
-			# @airtower.send! "FTSU", "\x0" * 12
-			response.each { | c | handle c }
+      when "_pin"
 
-		end
+        @product = packet[1].unpack1("a20")
 
-		# YIKES!
-		def handle packet
+      when "_top"
 
-			case packet[0]
-			when "_ver"
+        top = ["MEs", "Sources", "Colour Generators", "AUX busses", "DSKs", "Stingers", "DVEs", "SuperSources"]
+        @topology = top.zip(packet[1].unpack("CCCCCCCC")).to_h
 
-				@version = packet[1].unpack("S>S>")
+      when "VidM"
 
-			when "_pin"
+        @video_mode = packet[1].unpack("C")
 
-				@product = packet[1].unpack("a20")[0]
+      when "InPr"
 
-			when "_top"
+        input = ATEM::Switcher::Input.from packet[1], self, ATEM::Switcher::Input::Type::VIDEO
+        @inputs.add input
 
-				top = ["MEs", "Sources", "Colour Generators", "AUX busses", "DSKs", "Stingers", "DVEs", "SuperSources"]
-				@topology = Hash[top.zip(packet[1].unpack("CCCCCCCC"))]
+      when "AMIP"
 
-			when "VidM"
+        audio_id = packet[1].unpack1("S>") # ("S>CxxxCCCxS>s>")
 
-				@video_mode = packet[1].unpack("C")
+        input = @inputs[audio_id]
 
-			when "InPr"
+        if !@inputs[audio_id]
+          input = ATEM::Switcher::Input.new self
+          input.init audio_id
+          @inputs.add(input)
+        end
 
-				input = ATEM::Switcher::Input.from packet[1], self, ATEM::Switcher::Input::Type::VIDEO
-				@inputs.add input 
+        input.type |= ATEM::Switcher::Input::Type::AUDIO
+        input.audio = ATEM::Switcher::Input::Audio.from packet[1], self, input
 
-			when "AMIP"
+      when "AMLv"
 
-				audio_id = packet[1].unpack("S>")[0] #("S>CxxxCCCxS>s>")
+        master = {}
+        sources, master[:left], master[:right], master[:left_peak], master[:right_peak],
+          monitor = packet[1].unpack("S>xxl>l>l>l>l>")
 
-				input = @inputs[audio_id]
+        @master = master
+        start_offset = 38 + sources * 2
 
-				if !@inputs[audio_id] 
-					input = ATEM::Switcher::Input.new self
-					input.init audio_id
-					@inputs.add(input)
-				end
+        (0..sources - 1).each do |source|
+          source_id = packet[1][(36 + source * 2)..-1].unpack1("S>")
 
-				input.type |= ATEM::Switcher::Input::Type::AUDIO
-				input.audio = ATEM::Switcher::Input::Audio.from packet[1], self, input
+          levels = {}
 
-			when "AMLv"
+          levels[:left], levels[:right], levels[:left_peak], levels[:right_peak] =
+            packet[1][(start_offset + source * 16)..-1].unpack("l>l>l>l>")
 
-				master = {}
-				sources, master[:left], master[:right], master[:left_peak], master[:right_peak],
-					monitor = packet[1].unpack("S>xxl>l>l>l>l>")
+          @inputs[source_id].audio.levels = levels
+        end
 
-				@master = master
-				start_offset = 38 + sources * 2
+      end
+    end
 
-				(0..sources-1).each do | source |
+    def disconnect
+      @airtower.disconnect
+    end
 
-					source_id = packet[1][(36 + source * 2)..-1].unpack("S>")[0]
+    attr_reader :inputs
 
-					levels = {}
+    def multithreading
+      !@thread.nil?
+    end
 
-					levels[:left], levels[:right], levels[:left_peak], levels[:right_peak] =
-						packet[1][(start_offset + source * 16)..-1].unpack("l>l>l>l>")
+    def multithreading= enabled
+      @thread.kill if @thread
+      @thread = nil
+      return if !enabled
 
-					@inputs[source_id].audio.levels = levels
+      Thread.abort_on_exception = true
+      @thread = Thread.new do
+        loop do
+          packets = @airtower.receive
+          packets.each do |packet|
+            handle packet
+          end
+        end
+      end
+    end
 
-				end
+    attr_reader :use_audio_levels
 
-			end
+    def use_audio_levels= enabled
+      self.multithreading = true if !@thread
+      @airtower.send! "SALN", [enabled ? 1 : 0].pack("C") + "\0\0\0"
+    end
 
-		end
+    def reset_audio_peaks
+      @inputs.each do |id, input|
+        puts "Resetting #{input.name}" if !input.audio.nil?
+        @airtower.send! "RAMP", [2, 0, input.audio.id, 1, 0, 0, 0].pack("CCS>CCCC") if !input.audio.nil?
+      end
+    end
 
-		def disconnect
+    def preview id
+      @airtower.send! "CPvI", [0, 0, id].pack("CCS>")
+    end
 
-			@airtower.disconnect
-
-		end
-
-		def inputs
-			@inputs
-		end
-
-		def multithreading
-			@thread != nil
-		end
-
-		def multithreading= enabled
-
-			@thread.kill if @thread
-			@thread = nil
-			return if !enabled
-
-			Thread.abort_on_exception = true
-			@thread = Thread.new do
-
-				loop do
-
-					packets = @airtower.receive
-					packets.each do | packet |
-						handle packet
-					end
-
-				end
-
-			end
-
-		end
-
-		def use_audio_levels
-			@use_audio_levels
-		end
-
-		def use_audio_levels= enabled
-
-			self.multithreading = true if !@thread
-			@airtower.send! "SALN", [enabled ? 1 : 0].pack("C") + "\0\0\0"
-
-		end
-
-		def reset_audio_peaks
-
-			@inputs.each do | id, input |
-				
-				puts "Resetting #{input.name}" if input.audio != nil
-				@airtower.send! "RAMP", [2, 0, input.audio.id, 1, 0, 0, 0].pack("CCS>CCCC") if input.audio != nil
-
-			end
-
-		end
-
-		def preview id
-			@airtower.send! "CPvI", [0, 0, id].pack("CCS>")
-		end
-
-		def program id
-			@airtower.send! "CPgI", [0, 0, id].pack("CCS>")
-		end
-
-	end
-
+    def program id
+      @airtower.send! "CPgI", [0, 0, id].pack("CCS>")
+    end
+  end
 end
